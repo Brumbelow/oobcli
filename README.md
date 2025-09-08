@@ -10,7 +10,7 @@ Minimal, single-binary CLI to spin up out-of-band endpoints fast for bug bounty 
 go build -o oobcli ./cmd/oobcli
 
 # one-shot setup (interactsh): creates session, starts watcher, prints endpoints, self-tests
-./oobcli up --client-args '-http'
+./oobcli up
 
 # generate copy-paste payloads for the session
 ./oobcli payloads --session <id>
@@ -41,6 +41,15 @@ PREFIX=$HOME/.local make install
 ```
 # use your inbox URL from https://webhook.site/<uuid>
 ./oobcli up --provider webhook --webhook-url https://webhook.site/<uuid>
+```
+
+You can programmatically create an inbox (UUID) without auth:
+
+```
+curl -sX POST https://webhook.site/token \
+  -H 'Content-Type: application/json' \
+  -d '{"default_status":200}' | jq -r .uuid
+# use the returned UUID in --webhook-url
 ```
 
 ### Notes
