@@ -62,6 +62,17 @@ func TestWaitForLocalEvents(t *testing.T) {
     }
 }
 
+func TestWebhookHasTestID_MapArray(t *testing.T) {
+    m := map[string]any{
+        "headers": map[string]any{
+            "x-oob-test": []any{"foo", "bar", "test-abc"},
+        },
+    }
+    if !webhookHasTestID(m, "test-abc") {
+        t.Fatalf("expected webhookHasTestID to detect id in array header value")
+    }
+}
+
 func TestDataDirAndSessionsDir(t *testing.T) {
     // Use XDG_DATA_HOME override
     tmp := t.TempDir()
@@ -81,4 +92,3 @@ func TestDataDirAndSessionsDir(t *testing.T) {
         t.Fatalf("sessionsDir path unexpected: %q", sd)
     }
 }
-
