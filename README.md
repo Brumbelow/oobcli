@@ -36,6 +36,30 @@ PREFIX=$HOME/.local make install
 - `INTERACTSH_URL`: When using `interactsh`, sets the HTTP base used by `send-test` if it’s not yet captured from the client output.
 - `WEBHOOK_SITE_API_BASE`: Override the Webhook.site API base (default `https://webhook.site`) for restricted or proxied environments.
 
+### Interactsh Setup
+
+Install the official `interactsh-client` and ensure it’s on your `PATH`:
+
+```
+# Option A: Go (installs to $GOPATH/bin or $GOBIN)
+go install github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest
+
+# Option B: macOS (Homebrew)
+brew install projectdiscovery/tap/interactsh
+
+# Verify
+interactsh-client -version
+
+# Run oobcli with interactsh
+oobcli up --provider interactsh --wait 10s
+```
+
+This will:
+- create a session under `~/.local/share/oobcli/sessions/<id>`
+- start a background watcher
+- print assigned endpoints (HTTP/DNS/SMTP)
+- send a self-test and confirm receipt
+
 ### Webhook.site Mode (no tokens)
 
 ```
