@@ -532,6 +532,12 @@ func cmdSendTest(args []string) error {
 				base = v
 			}
 		}
+		if base == "" && meta.ProviderKV != nil {
+			// Fallback to domain by constructing https URL
+			if d := meta.ProviderKV["interactsh_domain"]; d != "" {
+				base = "https://" + d
+			}
+		}
 		if base == "" {
 			return errors.New("interactsh target unknown. Pass --target-url obtained from interactsh-client output or set INTERACTSH_URL env var")
 		}
@@ -1003,19 +1009,19 @@ func usage() {
 	fmt.Println("Usage:")
 	fmt.Println("  oobcli init --provider=interactsh|webhook [--label NAME] [--webhook-url URL]")
 	fmt.Println("  oobcli list")
-	fmt.Println("  oobcli watch --session ID [--filter http,dns,smtp] [--client-args '...'] [--bg]")
+    fmt.Println("  oobcli watch --session ID [--filter http,dns,smtp] [--client-args '...'] [--bg]")
 	fmt.Println("  oobcli endpoints --session ID")
-	fmt.Println("  oobcli send-test --session ID [--method POST] [--path /x] [--body 'payload'] [--target-url URL] [--wait 10s]")
-	fmt.Println("  oobcli up [--provider interactsh|webhook] [--webhook-url URL] [--client-args '...'] [--wait 10s]")
+    fmt.Println("  oobcli send-test --session ID [--method POST] [--path /x] [--body 'payload'] [--target-url URL] [--wait 10s]")
+    fmt.Println("  oobcli up [--provider interactsh|webhook] [--webhook-url URL] [--client-args '...'] [--wait 10s]")
 	fmt.Println("  oobcli stop --session ID")
 	fmt.Println("  oobcli payloads --session ID [--id CORR]")
 	fmt.Println()
 	fmt.Println("Examples:")
-	fmt.Println("  oobcli init --provider=interactsh --label recon")
-	fmt.Println("  oobcli list")
-	fmt.Println("  oobcli watch --session 1700000000-12345 --filter http --client-args '-http' ")
-	fmt.Println("  oobcli send-test --session 1700000000-12345 --method POST --path /probe --body 'hi' --target-url https://<sub>.oast.live --wait 10s")
-	fmt.Println("  oobcli up --provider interactsh --client-args '-http' --wait 10s")
+    fmt.Println("  oobcli init --provider=interactsh --label recon")
+    fmt.Println("  oobcli list")
+    fmt.Println("  oobcli watch --session 1700000000-12345 --filter http")
+    fmt.Println("  oobcli send-test --session 1700000000-12345 --method POST --path /probe --body 'hi' --target-url https://<sub>.oast.live --wait 10s")
+    fmt.Println("  oobcli up --provider interactsh --wait 10s")
 }
 
 func main() {
