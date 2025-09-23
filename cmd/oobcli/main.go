@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -71,9 +72,21 @@ func readJSON(path string, v any) error {
 	return dec.Decode(v)
 }
 
+var lastRandTS atomic.Int64
+
 func randID() string {
-	// timestamp + pid for simplicity (no deps). Not cryptographic.
-	return fmt.Sprintf("%d-%d", time.Now().Unix(), os.Getpid())
+	// timestamp (nanoseconds) + pid for simplicity (no deps). Not cryptographic.
+	ts := time.Now().UnixNano()
+	for {
+		prev := lastRandTS.Load()
+		if ts <= prev {
+			ts = prev + 1
+		}
+		if lastRandTS.CompareAndSwap(prev, ts) {
+			break
+		}
+	}
+	return fmt.Sprintf("%d-%d", ts, os.Getpid())
 }
 
 func metaPath(sessPath string) string   { return filepath.Join(sessPath, "meta.json") }
@@ -923,24 +936,24 @@ func waitForWebhookTest(meta SessionMeta, testID string, deadline time.Time) boo
 }
 
 func webhookHasTestID(m map[string]any, testID string) bool {
-    // Try headers as map[string]any
-    if hs, ok := m["headers"].(map[string]any); ok {
-        for k, v := range hs {
-            if strings.EqualFold(k, "X-OOB-Test") {
-                // value could be string or array (webhook.site often uses arrays)
-                if s, ok := v.(string); ok && strings.Contains(s, testID) {
-                    return true
-                }
-                if arr, ok := v.([]any); ok {
-                    for _, it := range arr {
-                        if strings.Contains(strings.ToLower(fmt.Sprint(it)), strings.ToLower(testID)) {
-                            return true
-                        }
-                    }
-                }
-            }
-        }
-    }
+	// Try headers as map[string]any
+	if hs, ok := m["headers"].(map[string]any); ok {
+		for k, v := range hs {
+			if strings.EqualFold(k, "X-OOB-Test") {
+				// value could be string or array (webhook.site often uses arrays)
+				if s, ok := v.(string); ok && strings.Contains(s, testID) {
+					return true
+				}
+				if arr, ok := v.([]any); ok {
+					for _, it := range arr {
+						if strings.Contains(strings.ToLower(fmt.Sprint(it)), strings.ToLower(testID)) {
+							return true
+						}
+					}
+				}
+			}
+		}
+	}
 	// Try headers as []map
 	if hs, ok := m["headers"].([]any); ok {
 		for _, it := range hs {
@@ -1009,19 +1022,19 @@ func usage() {
 	fmt.Println("Usage:")
 	fmt.Println("  oobcli init --provider=interactsh|webhook [--label NAME] [--webhook-url URL]")
 	fmt.Println("  oobcli list")
-    fmt.Println("  oobcli watch --session ID [--filter http,dns,smtp] [--client-args '...'] [--bg]")
+	fmt.Println("  oobcli watch --session ID [--filter http,dns,smtp] [--client-args '...'] [--bg]")
 	fmt.Println("  oobcli endpoints --session ID")
-    fmt.Println("  oobcli send-test --session ID [--method POST] [--path /x] [--body 'payload'] [--target-url URL] [--wait 10s]")
-    fmt.Println("  oobcli up [--provider interactsh|webhook] [--webhook-url URL] [--client-args '...'] [--wait 10s]")
+	fmt.Println("  oobcli send-test --session ID [--method POST] [--path /x] [--body 'payload'] [--target-url URL] [--wait 10s]")
+	fmt.Println("  oobcli up [--provider interactsh|webhook] [--webhook-url URL] [--client-args '...'] [--wait 10s]")
 	fmt.Println("  oobcli stop --session ID")
 	fmt.Println("  oobcli payloads --session ID [--id CORR]")
 	fmt.Println()
 	fmt.Println("Examples:")
-    fmt.Println("  oobcli init --provider=interactsh --label recon")
-    fmt.Println("  oobcli list")
-    fmt.Println("  oobcli watch --session 1700000000-12345 --filter http")
-    fmt.Println("  oobcli send-test --session 1700000000-12345 --method POST --path /probe --body 'hi' --target-url https://<sub>.oast.live --wait 10s")
-    fmt.Println("  oobcli up --provider interactsh --wait 10s")
+	fmt.Println("  oobcli init --provider=interactsh --label recon")
+	fmt.Println("  oobcli list")
+	fmt.Println("  oobcli watch --session 1700000000-12345 --filter http")
+	fmt.Println("  oobcli send-test --session 1700000000-12345 --method POST --path /probe --body 'hi' --target-url https://<sub>.oast.live --wait 10s")
+	fmt.Println("  oobcli up --provider interactsh --wait 10s")
 }
 
 func main() {
