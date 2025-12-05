@@ -12,6 +12,9 @@ go build -o oobcli ./cmd/oobcli
 # one-shot setup (interactsh): creates session, starts watcher, prints endpoints, self-tests
 ./oobcli up
 
+# webhook.site without extra setup: auto-creates an inbox for you
+./oobcli up --provider webhook
+
 # generate copy-paste payloads for the session
 ./oobcli payloads --session <id>
 
@@ -35,6 +38,7 @@ PREFIX=$HOME/.local make install
 
 - `INTERACTSH_URL`: When using `interactsh`, sets the HTTP base used by `send-test` if it’s not yet captured from the client output.
 - `WEBHOOK_SITE_API_BASE`: Override the Webhook.site API base (default `https://webhook.site`) for restricted or proxied environments.
+- `WEBHOOK_SITE_API_KEY`: Optional key for Webhook.site API polling (used automatically if present).
 
 ### Interactsh Setup
 
@@ -63,17 +67,11 @@ This will:
 ### Webhook.site Mode (no tokens)
 
 ```
-# use your inbox URL from https://webhook.site/<uuid>
+# Auto-provisions an inbox by default
+./oobcli up --provider webhook
+
+# Or reuse an existing inbox URL from https://webhook.site/<uuid>
 ./oobcli up --provider webhook --webhook-url https://webhook.site/<uuid>
-```
-
-You can programmatically create an inbox (UUID) without auth:
-
-```
-curl -sX POST https://webhook.site/token \
-  -H 'Content-Type: application/json' \
-  -d '{"default_status":200}' | jq -r .uuid
-# use the returned UUID in --webhook-url
 ```
 
 ### Notes
@@ -82,6 +80,7 @@ curl -sX POST https://webhook.site/token \
 - `watch --bg` runs the stream in background (log at `watch.log`, PID in `watch.pid`).
 - `stop --session <id>` is safe: it validates the PID stored in `watch.pid` and refuses to act on invalid values.
 - Webhook.site API polling is best-effort and auto-disables when an API key is required; you can still send tests and review in the UI.
+- Webhook.site sessions auto-create an inbox if one is not stored in the session; pass `--webhook-url` only when you need to reuse an existing inbox.
 - This repo uses a local Go build cache (`.gocache/`) so `make run/test/lint` work in restricted environments. The cache and built binaries are ignored by git.
 
 ### Release Builds

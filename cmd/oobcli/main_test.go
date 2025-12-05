@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -101,5 +103,64 @@ func TestDataDirAndSessionsDir(t *testing.T) {
 	}
 	if !strings.HasPrefix(sd, filepath.Join(tmp, "oobcli")) {
 		t.Fatalf("sessionsDir path unexpected: %q", sd)
+	}
+}
+
+func TestCreateWebhookInbox(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			t.Fatalf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/token" {
+			t.Fatalf("expected path /token, got %s", r.URL.Path)
+		}
+		if r.Header.Get("Api-Key") != "sekret" || r.Header.Get("X-Api-Key") != "sekret" {
+			t.Fatalf("api key headers not set")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"uuid":"abc-123"}`))
+	}))
+	defer ts.Close()
+
+	url, token, err := createWebhookInbox(ts.URL, "sekret")
+	if err != nil {
+		t.Fatalf("createWebhookInbox error: %v", err)
+	}
+	if token != "abc-123" {
+		t.Fatalf("expected token abc-123, got %s", token)
+	}
+	wantURL := ts.URL + "/abc-123"
+	if url != wantURL {
+		t.Fatalf("expected url %s, got %s", wantURL, url)
+	}
+}
+
+func TestEnsureWebhookURLPersists(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"uuid":"persist-1"}`))
+	}))
+	defer ts.Close()
+
+	t.Setenv("WEBHOOK_SITE_API_BASE", ts.URL)
+	meta := SessionMeta{ID: "s1", Provider: "webhook"}
+	dir := t.TempDir()
+	sessPath := filepath.Join(dir, "s1")
+	if err := os.MkdirAll(sessPath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	url, err := ensureWebhookURL(sessPath, &meta)
+	if err != nil {
+		t.Fatalf("ensureWebhookURL error: %v", err)
+	}
+	if url == "" || meta.ProviderKV["webhook_url"] != url {
+		t.Fatalf("expected webhook_url to be set, got %q", url)
+	}
+	var stored SessionMeta
+	if err := readJSON(metaPath(sessPath), &stored); err != nil {
+		t.Fatalf("readJSON: %v", err)
+	}
+	if stored.ProviderKV["webhook_url"] != url {
+		t.Fatalf("webhook_url not persisted; stored=%q url=%q", stored.ProviderKV["webhook_url"], url)
 	}
 }

